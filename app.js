@@ -300,16 +300,13 @@ function getSectionNameFromSheetName(sheetName) {
 }
 
 function parseSheetEntries(rows, sectionName, projectKey, fileName) {
-  // 배열 인덱스는 엑셀 행번호 - 1
-  const headerRow3 = rows[2] || []; // 노란색 타이틀 행
-  const headerRow4 = rows[3] || []; // 주황색 타이틀 행
+  const headerRow3 = rows[2] || []; 
+  const headerRow4 = rows[3] || []; 
 
-  // 수량합계(노란색 연결), 면적합계(주황색 연결)가 위치한 행을 자동으로 찾습니다.
   let rowIdxSum3 = -1; 
   let rowIdxSum4 = -1; 
 
   for (let r = 5; r < rows.length; r++) {
-    // 앞쪽 10개 열 안에서 키워드를 검색합니다.
     const text = (rows[r] || []).slice(0, 10).map(x => normalizeText(String(x))).join("");
     if (text.includes("수량합계") && rowIdxSum3 === -1) {
       rowIdxSum3 = r;
@@ -319,23 +316,19 @@ function parseSheetEntries(rows, sectionName, projectKey, fileName) {
     }
   }
 
-  // 혹시라도 '수량합계' 텍스트를 못 찾았다면, 사용자가 지정한 38열(인덱스 37)로 강제 지정
   if (rowIdxSum3 === -1 && rows.length > 37) rowIdxSum3 = 37;
-  // 혹시라도 '면적합계' 텍스트를 못 찾았다면, 사용자가 지정한 39열(인덱스 38)로 강제 지정
   if (rowIdxSum4 === -1 && rows.length > 38) rowIdxSum4 = 38;
 
   const colStart = 1;
   const colEnd = Math.max(headerRow3.length, headerRow4.length) - 1;
   const entries = [];
   
-  // 합계나 비고 같은 타이틀은 건너뛰기
   const skipHeaders = ["합계", "비고", "누계", "소계"];
 
   for (let c = colStart; c <= colEnd; c += 1) {
     const name3 = normalizeDisplayText(headerRow3[c]);
     const name4 = normalizeDisplayText(headerRow4[c]);
 
-    // 1) 3행(노란색) 타이틀이 있다면 -> 연결된 38열(수량합계) 행에서 값을 뽑아옴
     if (name3 && !skipHeaders.includes(name3)) {
       const val = rowIdxSum3 !== -1 ? toNumber(rows[rowIdxSum3][c]) : 0;
       if (val !== 0) {
@@ -353,7 +346,6 @@ function parseSheetEntries(rows, sectionName, projectKey, fileName) {
       }
     }
 
-    // 2) 4행(주황색) 타이틀이 있다면 -> 연결된 39열(면적합계) 행에서 값을 뽑아옴
     if (name4 && !skipHeaders.includes(name4)) {
       const val = rowIdxSum4 !== -1 ? toNumber(rows[rowIdxSum4][c]) : 0;
       if (val !== 0) {
@@ -982,7 +974,7 @@ async function extractNamesFromFiles() {
 }
 
 /** -----------------------------
- * 비교표 계산
+ * 비교표 계산 (정렬 및 카테고리 강제 고정 로직)
  * ----------------------------- */
 function getMappedEntriesByProject() {
   const result = {
@@ -1039,7 +1031,7 @@ function calcCompareRows() {
   const mappedEntries = getMappedEntriesByProject();
   const aggregate = buildProjectAggregate(mappedEntries);
 
-  // 1. 데이터에 존재하는 모든 키(구분__분류__아이템구분) 수집
+  // 1. 모든 키(항목) 수집
   const allKeys = new Set();
   for (const projectKey of PROJECT_KEYS) {
     for (const k of Object.keys(aggregate[projectKey])) {
@@ -1047,93 +1039,106 @@ function calcCompareRows() {
     }
   }
 
-  // 2. 동(Section)별로 사용자 추가 항목을 그룹화
-  const dynamicKeysBySection = {};
+  // 2. 동(Section) + 카테고리(Category)별 사용자 추가 항목(Dynamic) 분류
+  const dynamicItems = {};
+  const hardcodedKeys = new Set();
+
+  for (const row of COMPARE_LAYOUT) {
+    if (row.type !== "section") {
+      hardcodedKeys.add(`${row.section}__${row.category}__${row.itemCode}`);
+    }
+  }
+
   for (const k of allKeys) {
-    const parts = k.split("__");
-    const sec = parts[0];
-    const cat = parts[1];
-    const ic = parts[2];
-    if (!dynamicKeysBySection[sec]) dynamicKeysBySection[sec] = [];
-    dynamicKeysBySection[sec].push({ key: k, category: cat, itemCode: ic });
+    if (!hardcodedKeys.has(k)) {
+      const parts = k.split("__");
+      const sec = parts[0];
+      const cat = parts[1];
+      const ic = parts[2];
+
+      if (!dynamicItems[sec]) dynamicItems[sec] = {};
+      if (!dynamicItems[sec][cat]) dynamicItems[sec][cat] = [];
+      
+      dynamicItems[sec][cat].push(ic);
+    }
   }
 
   const rows = [];
-  const processedKeys = new Set();
-  let currentSection = "";
+  const sections = ["APT", "PIT", "주차장", "부대동"];
+  const categoryOrder = ["레미콘", "거푸집", "철근"]; // 엑셀/PDF 양식에 맞춘 강제 정렬 순서
 
-  for (const row of COMPARE_LAYOUT) {
-    if (row.type === "section") {
-      // 이전 구분이 끝나고 다음 구분으로 넘어가기 전에, 해당 구분의 '사용자 추가 항목'들을 표에 이어 붙입니다.
-      if (currentSection && dynamicKeysBySection[currentSection]) {
-        for (const dyn of dynamicKeysBySection[currentSection]) {
-          if (!processedKeys.has(dyn.key)) {
-            const cur = aggregate.current[dyn.key] || 0;
-            const A = aggregate.A[dyn.key] || 0;
-            const B = aggregate.B[dyn.key] || 0;
-            const C = aggregate.C[dyn.key] || 0;
-            const avg = (A + B + C) / 3;
-            const ratio = cur === 0 ? 0 : avg / cur;
-            
-            rows.push({
-              section: currentSection,
-              itemCode: dyn.itemCode,
-              item: dyn.category, // 품명은 분류(레미콘 등)로 통일
-              spec: "-",          // 임의 추가 항목이므로 규격란은 비움
-              category: dyn.category,
-              current: cur, A, B, C, avg, ratio, note: "사용자 추가 항목"
-            });
-            processedKeys.add(dyn.key);
-          }
-        }
-      }
-      currentSection = row.section;
-      rows.push(row);
-      continue;
-    }
+  for (const sec of sections) {
+    rows.push({ type: "section", section: sec });
 
-    const key = `${row.section}__${row.category}__${row.itemCode}`;
-    processedKeys.add(key);
-
-    const current = aggregate.current[key] || 0;
-    const A = aggregate.A[key] || 0;
-    const B = aggregate.B[key] || 0;
-    const C = aggregate.C[key] || 0;
-    const avg = (A + B + C) / 3;
-    const ratio = current === 0 ? 0 : avg / current;
-
-    rows.push({
-      ...row,
-      current,
-      A,
-      B,
-      C,
-      avg,
-      ratio,
-      note: row.note || "",
-    });
-  }
-
-  // 3. 마지막 구분의 '사용자 추가 항목' 털어넣기
-  if (currentSection && dynamicKeysBySection[currentSection]) {
-    for (const dyn of dynamicKeysBySection[currentSection]) {
-      if (!processedKeys.has(dyn.key)) {
-        const cur = aggregate.current[dyn.key] || 0;
-        const A = aggregate.A[dyn.key] || 0;
-        const B = aggregate.B[dyn.key] || 0;
-        const C = aggregate.C[dyn.key] || 0;
+    // 정해진 순서대로(레미콘 -> 거푸집 -> 철근) 출력
+    for (const cat of categoryOrder) {
+      
+      // A. 기존에 틀(COMPARE_LAYOUT)에 정의된 항목들 먼저 출력
+      const hardcodedForCat = COMPARE_LAYOUT.filter(
+        r => r.type !== "section" && r.section === sec && r.category === cat
+      );
+      
+      for (const row of hardcodedForCat) {
+        const key = `${sec}__${cat}__${row.itemCode}`;
+        const cur = aggregate.current[key] || 0;
+        const A = aggregate.A[key] || 0;
+        const B = aggregate.B[key] || 0;
+        const C = aggregate.C[key] || 0;
         const avg = (A + B + C) / 3;
         const ratio = cur === 0 ? 0 : avg / cur;
-        
+
         rows.push({
-          section: currentSection,
-          itemCode: dyn.itemCode,
-          item: dyn.category,
-          spec: "-",
-          category: dyn.category,
-          current: cur, A, B, C, avg, ratio, note: "사용자 추가 항목"
+          ...row,
+          current: cur, A, B, C, avg, ratio, note: row.note || ""
         });
-        processedKeys.add(dyn.key);
+      }
+
+      // B. 사용자가 추가한 신규 항목을 해당 카테고리 밑에 이어서 출력 (신규 규격 = 아이템구분)
+      if (dynamicItems[sec] && dynamicItems[sec][cat]) {
+        for (const ic of dynamicItems[sec][cat]) {
+          const key = `${sec}__${cat}__${ic}`;
+          const cur = aggregate.current[key] || 0;
+          const A = aggregate.A[key] || 0;
+          const B = aggregate.B[key] || 0;
+          const C = aggregate.C[key] || 0;
+          const avg = (A + B + C) / 3;
+          const ratio = cur === 0 ? 0 : avg / cur;
+
+          rows.push({
+            section: sec,
+            itemCode: ic,
+            item: cat,       // 품명은 카테고리명 (레미콘, 거푸집 등)
+            spec: ic,        // 규격은 아이템구분명(경사 등)과 완벽히 동일하게
+            category: cat,
+            current: cur, A, B, C, avg, ratio, note: "사용자 추가 항목"
+          });
+        }
+      }
+    }
+    
+    // C. 혹시 '레미콘, 거푸집, 철근' 외 다른 카테고리가 매핑된 경우 맨 밑에 추가 (안전망)
+    if (dynamicItems[sec]) {
+      for (const [dynCat, dynIcs] of Object.entries(dynamicItems[sec])) {
+        if (!categoryOrder.includes(dynCat)) {
+          for (const ic of dynIcs) {
+            const key = `${sec}__${dynCat}__${ic}`;
+            const cur = aggregate.current[key] || 0;
+            const A = aggregate.A[key] || 0;
+            const B = aggregate.B[key] || 0;
+            const C = aggregate.C[key] || 0;
+            const avg = (A + B + C) / 3;
+            const ratio = cur === 0 ? 0 : avg / cur;
+
+            rows.push({
+              section: sec,
+              itemCode: ic,
+              item: dynCat,
+              spec: ic,
+              category: dynCat,
+              current: cur, A, B, C, avg, ratio, note: "사용자 추가 항목"
+            });
+          }
+        }
       }
     }
   }
@@ -1215,7 +1220,7 @@ function validateBeforeCalc() {
 }
 
 /** -----------------------------
- * CSV 내보내기
+ * CSV 내보내기 (양식에 맞춰 그룹화 및 정렬 유지)
  * ----------------------------- */
 function exportCompareCsv() {
   if (!state.lastCompareRows.length) {
