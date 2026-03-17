@@ -37,6 +37,9 @@ const btnSaveMapping = $("btn-save-mapping");
 const mappingBody = $("mapping-body");
 const typeaheadRoot = $("typeahead-root");
 
+// 탭 버튼 요소 가져오기
+const legendChips = document.querySelectorAll(".legend__chip");
+
 /** -----------------------------
  * 상수
  * ----------------------------- */
@@ -191,6 +194,7 @@ const state = {
     items: [],
     activeIndex: -1,
   },
+  activeTab: "APT", // 현재 선택된 탭 (기본값 APT)
 };
 
 /** -----------------------------
@@ -237,7 +241,6 @@ function fmtNumber(value) {
   });
 }
 
-// UI 표에 100% 형태로 출력되게 변경
 function fmtRatio(value) {
   if (!value && value !== 0) return "0%";
   return (Number(value) * 100).toFixed(0) + "%";
@@ -283,6 +286,25 @@ function ensureItemCodeOption(value) {
     state.itemCodeOptions.push(text);
     state.itemCodeOptions = sortUniqueStrings(state.itemCodeOptions);
   }
+}
+
+/** -----------------------------
+ * 탭 관련 UI 업데이트
+ * ----------------------------- */
+function updateTabUI() {
+  legendChips.forEach(chip => {
+    const chipText = chip.textContent.trim();
+    if (chipText === state.activeTab) {
+      chip.classList.add("is-active");
+      // CSS 수정 누락 대비 인라인 스타일 강제 적용
+      chip.style.opacity = "1";
+      chip.style.borderWidth = "2px";
+    } else {
+      chip.classList.remove("is-active");
+      chip.style.opacity = "0.4";
+      chip.style.borderWidth = "1px";
+    }
+  });
 }
 
 /** -----------------------------
@@ -1138,6 +1160,7 @@ function calcCompareRows() {
   return rows;
 }
 
+// UI 표 렌더링 (선택된 탭 내용만 표시)
 function renderCompareTable(rows) {
   if (!rows.length) {
     compareBody.innerHTML = `
@@ -1148,17 +1171,20 @@ function renderCompareTable(rows) {
     return;
   }
 
-  const html = rows
-    .map((row) => {
-      if (row.type === "section") {
-        const cls = SECTION_DISPLAY_CLASS[row.section] || "";
-        return `
-          <tr class="section-row ${cls}">
-            <td colspan="11">${escapeHtml(row.section)}</td>
-          </tr>
-        `;
-      }
+  // 화면에는 현재 선택된 탭(동) 데이터만 필터링해서 보여줍니다 (타이틀 행 제외)
+  const filteredRows = rows.filter(r => r.section === state.activeTab && r.type !== "section");
 
+  if (!filteredRows.length) {
+    compareBody.innerHTML = `
+      <tr>
+        <td colspan="11" class="empty-row">[${state.activeTab}] 영역에 해당하는 데이터가 없습니다.</td>
+      </tr>
+    `;
+    return;
+  }
+
+  const html = filteredRows
+    .map((row) => {
       return `
         <tr>
           <td>${escapeHtml(row.section)}</td>
@@ -1211,7 +1237,7 @@ function validateBeforeCalc() {
 }
 
 /** -----------------------------
- * 엑셀 다운로드 (스타일 및 서식 완벽 지원)
+ * 엑셀 다운로드 (색상, 선, 병합 완벽 지원 - 화면과 무관하게 전체 데이터 추출)
  * ----------------------------- */
 function exportCompareExcel() {
   if (!state.lastCompareRows.length) {
@@ -1222,7 +1248,6 @@ function exportCompareExcel() {
   const ws = {};
   const merges = [];
   
-  // 1. 공통 스타일 정의 (xlsx-js-style 전용)
   const borderAll = {
     top: { style: "thin", color: { auto: 1 } },
     bottom: { style: "thin", color: { auto: 1 } },
@@ -1231,14 +1256,14 @@ function exportCompareExcel() {
   };
 
   const headerStyle = {
-    fill: { fgColor: { rgb: "DCE6F1" } }, // 연한 파란색
+    fill: { fgColor: { rgb: "DCE6F1" } }, 
     font: { bold: true, color: { rgb: "000000" } },
     alignment: { horizontal: "center", vertical: "center" },
     border: borderAll
   };
 
   const sectionStyle = {
-    fill: { fgColor: { rgb: "B8CCE4" } }, // 살짝 진한 파란색
+    fill: { fgColor: { rgb: "B8CCE4" } }, 
     font: { bold: true, color: { rgb: "000000" } },
     alignment: { horizontal: "center", vertical: "center" },
     border: borderAll
@@ -1254,35 +1279,31 @@ function exportCompareExcel() {
     font: { color: { rgb: "000000" } },
     alignment: { horizontal: "right", vertical: "center" },
     border: borderAll,
-    numFmt: "#,##0.00" // 숫자 콤마 및 소수점 2자리
+    numFmt: "#,##0.00" 
   };
 
   const ratioStyle = {
     font: { color: { rgb: "000000" } },
     alignment: { horizontal: "right", vertical: "center" },
     border: borderAll,
-    numFmt: "0%" // 비율을 100% 형태 엑셀 서식으로 지정 (수식 계산 가능)
+    numFmt: "0%" // 비율을 엑셀 서식의 백분율(%)로 저장
   };
 
-  // 2. 헤더 행 생성 (Row 0)
   const headers = ["구분", "아이템구분", "품명", "규격", "현재 프로젝트", "A 프로젝트", "B 프로젝트", "C 프로젝트", "평균치(A~C)", "비율", "비고"];
   for (let c = 0; c < headers.length; c++) {
     const cellRef = XLSX.utils.encode_cell({ c: c, r: 0 });
     ws[cellRef] = { v: headers[c], t: "s", s: headerStyle };
   }
 
-  // 3. 데이터 행 생성
   let r = 1; 
   state.lastCompareRows.forEach((row) => {
     if (row.type === "section") {
-      // (1) 동(APT 등) 구분 타이틀 병합 셀 생성
       ws[XLSX.utils.encode_cell({ c: 0, r: r })] = { v: row.section, t: "s", s: sectionStyle };
       for (let c = 1; c <= 10; c++) {
         ws[XLSX.utils.encode_cell({ c: c, r: r })] = { v: "", t: "s", s: sectionStyle };
       }
-      merges.push({ s: { r: r, c: 0 }, e: { r: r, c: 10 } }); // A~K열 병합
+      merges.push({ s: { r: r, c: 0 }, e: { r: r, c: 10 } }); 
     } else {
-      // (2) 일반 수량 데이터 셀 생성
       const rowData = [
         { v: row.section, t: "s", s: centerStyle },
         { v: row.itemCode, t: "s", s: centerStyle },
@@ -1293,7 +1314,7 @@ function exportCompareExcel() {
         { v: row.B, t: "n", s: numberStyle },
         { v: row.C, t: "n", s: numberStyle },
         { v: row.avg, t: "n", s: numberStyle },
-        { v: row.ratio, t: "n", s: ratioStyle }, // 100% 퍼센트 속성 적용
+        { v: row.ratio, t: "n", s: ratioStyle }, 
         { v: row.note || "", t: "s", s: centerStyle },
       ];
 
@@ -1304,24 +1325,14 @@ function exportCompareExcel() {
     r++;
   });
 
-  // 4. 셀 범위, 열 너비, 병합 설정 주입
   ws['!ref'] = XLSX.utils.encode_range({ s: { c: 0, r: 0 }, e: { c: 10, r: r - 1 } });
   ws['!merges'] = merges;
   ws['!cols'] = [
-    { wch: 10 }, // A: 구분
-    { wch: 12 }, // B: 아이템구분
-    { wch: 10 }, // C: 품명
-    { wch: 15 }, // D: 규격
-    { wch: 14 }, // E: 현재 프로젝트
-    { wch: 14 }, // F: A 프로젝트
-    { wch: 14 }, // G: B 프로젝트
-    { wch: 14 }, // H: C 프로젝트
-    { wch: 14 }, // I: 평균치
-    { wch: 10 }, // J: 비율
-    { wch: 20 }, // K: 비고
+    { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 15 }, 
+    { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, 
+    { wch: 14 }, { wch: 10 }, { wch: 20 }, 
   ];
 
-  // 5. 파일 다운로드
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "비교표");
   XLSX.writeFile(wb, "비교표_결과.xlsx");
@@ -1354,13 +1365,23 @@ function resetAll() {
 }
 
 /** -----------------------------
- * 이벤트
+ * 이벤트 연결
  * ----------------------------- */
 for (const key of PROJECT_KEYS) {
   fileInputs[key].addEventListener("change", updateFileListText);
 }
 
-// 버튼 텍스트 변경
+// 탭 버튼 클릭 이벤트 등록
+legendChips.forEach(chip => {
+  chip.addEventListener("click", (e) => {
+    state.activeTab = e.target.textContent.trim();
+    updateTabUI();
+    if (state.lastCompareRows.length > 0) {
+      renderCompareTable(state.lastCompareRows);
+    }
+  });
+});
+
 btnExportCsv.textContent = "엑셀 내보내기";
 
 btnExtract.addEventListener("click", async () => {
@@ -1414,7 +1435,6 @@ btnCalc.addEventListener("click", () => {
   }
 });
 
-// CSV 대신 엑셀 다운로드 함수로 연결 교체
 btnExportCsv.addEventListener("click", exportCompareExcel);
 btnReset.addEventListener("click", resetAll);
 
@@ -1441,8 +1461,9 @@ window.addEventListener("scroll", () => {
 }, true);
 
 /** -----------------------------
- * 최초 상태
+ * 최초 상태 초기화
  * ----------------------------- */
 updateFileListText();
+updateTabUI(); // 초기 탭 활성화 상태 적용
 setStatus("대기 중");
 setLog("로그가 여기에 표시됩니다.");
