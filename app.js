@@ -1243,14 +1243,12 @@ function exportCompareExcel() {
     return;
   }
 
-  // xlsx-js-style 전용 변수 세팅
   const ws = {};
   const merges = [];
+  const rowsFormat = []; // 횡방향 행간 두께(높이) 조절용 배열
   
-  // 공통 폰트 지정
+  // 1. 공통 폰트 및 테두리 두께 지정
   const fontName = "맑은 고딕";
-  
-  // 공통 테두리 지정
   const borderAll = {
     top: { style: "thin", color: { rgb: "000000" } },
     bottom: { style: "thin", color: { rgb: "000000" } },
@@ -1258,79 +1256,78 @@ function exportCompareExcel() {
     right: { style: "thin", color: { rgb: "000000" } }
   };
 
-  // 타이틀 행 스타일 (큰 글씨 중앙 정렬)
+  // 2. 각 영역별 스타일 디테일 지정 (컬러, 폰트 크기, 정렬 등)
   const titleStyle = {
     font: { name: fontName, bold: true, sz: 16, color: { rgb: "000000" } },
     alignment: { horizontal: "center", vertical: "center" }
   };
 
-  // 헤더 행 스타일 (옅은 회색 배경, 굵은 글씨)
   const headerStyle = {
-    fill: { fgColor: { rgb: "F2F2F2" } }, 
-    font: { name: fontName, bold: true, color: { rgb: "000000" } },
+    fill: { fgColor: { rgb: "F2F2F2" } }, // 회색 배경
+    font: { name: fontName, bold: true, sz: 10, color: { rgb: "000000" } },
     alignment: { horizontal: "center", vertical: "center" },
     border: borderAll
   };
 
-  // 동 섹션 행 스타일 (연초록 배경, 굵은 글씨)
   const sectionStyle = {
-    fill: { fgColor: { rgb: "E2EFDA" } }, 
-    font: { name: fontName, bold: true, color: { rgb: "000000" } },
+    fill: { fgColor: { rgb: "E2EFDA" } }, // 연초록색 배경
+    font: { name: fontName, bold: true, sz: 10, color: { rgb: "000000" } },
     alignment: { horizontal: "center", vertical: "center" },
     border: borderAll
   };
 
-  // 중앙 정렬 텍스트 스타일 (코드, 품명, 규격 등)
   const centerStyle = {
-    font: { name: fontName, color: { rgb: "000000" } },
+    font: { name: fontName, sz: 10, color: { rgb: "000000" } },
     alignment: { horizontal: "center", vertical: "center" },
     border: borderAll
   };
 
-  // 숫자 스타일 (우측 정렬, 소수점 버리고 콤마 찍기)
   const numberStyle = {
-    font: { name: fontName, color: { rgb: "000000" } },
+    font: { name: fontName, sz: 10, color: { rgb: "000000" } },
     alignment: { horizontal: "right", vertical: "center" },
     border: borderAll,
-    numFmt: "#,##0" 
+    numFmt: "#,##0" // 소수점 버리고 천단위 콤마
   };
 
-  // 퍼센트 스타일 (가운데 정렬, 100% 형식 지정)
   const ratioStyle = {
-    font: { name: fontName, color: { rgb: "000000" } },
+    font: { name: fontName, sz: 10, color: { rgb: "000000" } },
     alignment: { horizontal: "center", vertical: "center" },
     border: borderAll,
-    numFmt: "0%" 
+    numFmt: "0%" // 비율을 완벽한 100% 엑셀 서식으로 지정
   };
 
-  // 1. 최상단 타이틀 입력 (A1 ~ J1 병합)
+  // 3. 최상단 타이틀 입력 및 행 높이 설정
   ws[XLSX.utils.encode_cell({ c: 0, r: 0 })] = { v: "ㅇㅇ 프로젝트 비교분석자료", t: "s", s: titleStyle };
-  merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: 9 } });
+  merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: 9 } }); // A1 ~ J1 병합
+  rowsFormat[0] = { hpt: 40 }; // 1행 높이 크게
 
-  // 2. 항목 헤더 설정 (구분 열이 사라진 '비교표_갑지' 10열 양식 그대로)
+  // 4. 헤더 설정 (10열 양식)
   const headers = ["코드", "품명", "규격", "현재 프로젝트", "'A' 프로젝트", "'B' 프로젝트", "'C' 프로젝트", "평균치(A~C프로젝트)", "비율", "비고"];
   for (let c = 0; c < headers.length; c++) {
     ws[XLSX.utils.encode_cell({ c: c, r: 1 })] = { v: headers[c], t: "s", s: headerStyle };
   }
+  rowsFormat[1] = { hpt: 25 }; // 2행 높이
 
-  // 3. 실제 데이터 입력 루프 시작
+  // 5. 실제 데이터 입력
   let r = 2; 
   state.lastCompareRows.forEach((row) => {
     if (row.type === "section") {
-      // 3-1. 동(APT, PIT 등) 영역 전환 시 한 줄 빈 행 추가 (구분을 위해 테두리 없음)
+      // 5-1. 동(APT, PIT 등) 영역 전환 시 한 줄 빈 행 추가
       for (let c = 0; c < 10; c++) {
         ws[XLSX.utils.encode_cell({ c: c, r: r })] = { v: "", t: "s" };
       }
+      rowsFormat[r] = { hpt: 12 }; // 빈 줄은 높이를 얇게
       r++;
 
-      // 3-2. 동(APT, PIT 등) 섹션 타이틀 행 추가 (B열에 타이틀 배치, A~J 배경 칠하기)
+      // 5-2. 섹션 타이틀 행 추가 (B열에 타이틀 배치, A~J 배경 칠하기)
       for (let c = 0; c < 10; c++) {
         let val = c === 1 ? row.section : "";
         ws[XLSX.utils.encode_cell({ c: c, r: r })] = { v: val, t: "s", s: sectionStyle };
       }
+      rowsFormat[r] = { hpt: 22 }; // 섹션 행 높이
       r++;
     } else {
-      // 3-3. 데이터 렌더링 (화면 출력과 무관하게 전체 데이터 삽입)
+      // 5-3. 데이터 렌더링
       const ratioVal = Number.isFinite(row.ratio) ? Number(row.ratio) : 0;
       
       const rowData = [
@@ -1349,14 +1346,16 @@ function exportCompareExcel() {
       for (let c = 0; c < rowData.length; c++) {
         ws[XLSX.utils.encode_cell({ c: c, r: r })] = rowData[c];
       }
+      rowsFormat[r] = { hpt: 20 }; // 일반 데이터 행 높이
       r++;
     }
   });
 
-  // 4. 셀 크기, 병합 등 최종 옵션 주입
+  // 6. 셀 크기, 병합, 행 높이 등 최종 옵션 주입
   ws['!ref'] = XLSX.utils.encode_range({ s: { c: 0, r: 0 }, e: { c: 9, r: r - 1 } });
   ws['!merges'] = merges;
-  ws['!cols'] = [
+  ws['!rows'] = rowsFormat; // 행 높이(횡방향 두께) 적용
+  ws['!cols'] = [ // 열 너비(종방향 두께) 적용
     { wch: 10 }, // A: 코드
     { wch: 12 }, // B: 품명
     { wch: 16 }, // C: 규격
@@ -1369,7 +1368,7 @@ function exportCompareExcel() {
     { wch: 15 }, // J: 비고
   ];
 
-  // 5. 엑셀 파일 생성
+  // 7. 엑셀 파일 생성
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "비교표");
   XLSX.writeFile(wb, "비교표_결과.xlsx");
