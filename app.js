@@ -241,6 +241,7 @@ function fmtNumber(value) {
   });
 }
 
+// 엑셀과 UI 모두에서 퍼센트가 직관적으로 나오도록 텍스트(%)로 반환
 function fmtRatio(value) {
   if (!value && value !== 0) return "0%";
   return (Number(value) * 100).toFixed(0) + "%";
@@ -296,7 +297,6 @@ function updateTabUI() {
     const chipText = chip.textContent.trim();
     if (chipText === state.activeTab) {
       chip.classList.add("is-active");
-      // CSS 수정 누락 대비 인라인 스타일 강제 적용
       chip.style.opacity = "1";
       chip.style.borderWidth = "2px";
     } else {
@@ -1171,7 +1171,6 @@ function renderCompareTable(rows) {
     return;
   }
 
-  // 화면에는 현재 선택된 탭(동) 데이터만 필터링해서 보여줍니다 (타이틀 행 제외)
   const filteredRows = rows.filter(r => r.section === state.activeTab && r.type !== "section");
 
   if (!filteredRows.length) {
@@ -1237,7 +1236,7 @@ function validateBeforeCalc() {
 }
 
 /** -----------------------------
- * 엑셀 다운로드 (색상, 선, 병합 완벽 지원 - 화면과 무관하게 전체 데이터 추출)
+ * 엑셀 다운로드 (원하시는 "비교표_갑지" 형태 복제)
  * ----------------------------- */
 function exportCompareExcel() {
   if (!state.lastCompareRows.length) {
@@ -1248,6 +1247,7 @@ function exportCompareExcel() {
   const ws = {};
   const merges = [];
   
+  // 스타일 설정 (xlsx-js-style이 켜져있어야 적용됨)
   const borderAll = {
     top: { style: "thin", color: { auto: 1 } },
     bottom: { style: "thin", color: { auto: 1 } },
@@ -1255,15 +1255,20 @@ function exportCompareExcel() {
     right: { style: "thin", color: { auto: 1 } }
   };
 
+  const titleStyle = {
+    font: { bold: true, sz: 16, color: { rgb: "000000" } },
+    alignment: { horizontal: "center", vertical: "center" }
+  };
+
   const headerStyle = {
-    fill: { fgColor: { rgb: "DCE6F1" } }, 
+    fill: { fgColor: { rgb: "F2F2F2" } }, 
     font: { bold: true, color: { rgb: "000000" } },
     alignment: { horizontal: "center", vertical: "center" },
     border: borderAll
   };
 
   const sectionStyle = {
-    fill: { fgColor: { rgb: "B8CCE4" } }, 
+    fill: { fgColor: { rgb: "E2EFDA" } }, 
     font: { bold: true, color: { rgb: "000000" } },
     alignment: { horizontal: "center", vertical: "center" },
     border: borderAll
@@ -1275,6 +1280,12 @@ function exportCompareExcel() {
     border: borderAll
   };
 
+  const rightStyle = {
+    font: { color: { rgb: "000000" } },
+    alignment: { horizontal: "right", vertical: "center" },
+    border: borderAll
+  };
+
   const numberStyle = {
     font: { color: { rgb: "000000" } },
     alignment: { horizontal: "right", vertical: "center" },
@@ -1282,30 +1293,34 @@ function exportCompareExcel() {
     numFmt: "#,##0.00" 
   };
 
-  const ratioStyle = {
-    font: { color: { rgb: "000000" } },
-    alignment: { horizontal: "right", vertical: "center" },
-    border: borderAll,
-    numFmt: "0%" // 비율을 엑셀 서식의 백분율(%)로 저장
-  };
+  // Row 0: 최상단 타이틀 (A~J 병합)
+  ws[XLSX.utils.encode_cell({ c: 0, r: 0 })] = { v: "ㅇㅇ 프로젝트 비교분석자료", t: "s", s: titleStyle };
+  merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: 9 } });
 
-  const headers = ["구분", "아이템구분", "품명", "규격", "현재 프로젝트", "A 프로젝트", "B 프로젝트", "C 프로젝트", "평균치(A~C)", "비율", "비고"];
+  // Row 1: 사용자가 첨부한 양식과 100% 동일한 헤더 목록 (구분 열 삭제)
+  const headers = ["코드", "품명", "규격", "현재 프로젝트", "A 프로젝트", "B 프로젝트", "C 프로젝트", "평균치(A~C프로젝트)", "비율", "비고"];
   for (let c = 0; c < headers.length; c++) {
-    const cellRef = XLSX.utils.encode_cell({ c: c, r: 0 });
-    ws[cellRef] = { v: headers[c], t: "s", s: headerStyle };
+    ws[XLSX.utils.encode_cell({ c: c, r: 1 })] = { v: headers[c], t: "s", s: headerStyle };
   }
 
-  let r = 1; 
+  let r = 2; 
   state.lastCompareRows.forEach((row) => {
     if (row.type === "section") {
-      ws[XLSX.utils.encode_cell({ c: 0, r: r })] = { v: row.section, t: "s", s: sectionStyle };
-      for (let c = 1; c <= 10; c++) {
-        ws[XLSX.utils.encode_cell({ c: c, r: r })] = { v: "", t: "s", s: sectionStyle };
+      // 1. 구역 전환 시 한 칸 띄우기
+      for (let c = 0; c < 10; c++) {
+        ws[XLSX.utils.encode_cell({ c: c, r: r })] = { v: "", t: "s" };
       }
-      merges.push({ s: { r: r, c: 0 }, e: { r: r, c: 10 } }); 
+      r++;
+
+      // 2. 동(APT, PIT 등) 이름 행 삽입 (B열에 텍스트)
+      for (let c = 0; c < 10; c++) {
+        let val = c === 1 ? row.section : "";
+        ws[XLSX.utils.encode_cell({ c: c, r: r })] = { v: val, t: "s", s: sectionStyle };
+      }
+      r++;
     } else {
+      // 3. 실제 데이터 값 삽입
       const rowData = [
-        { v: row.section, t: "s", s: centerStyle },
         { v: row.itemCode, t: "s", s: centerStyle },
         { v: row.item, t: "s", s: centerStyle },
         { v: row.spec, t: "s", s: centerStyle },
@@ -1314,23 +1329,31 @@ function exportCompareExcel() {
         { v: row.B, t: "n", s: numberStyle },
         { v: row.C, t: "n", s: numberStyle },
         { v: row.avg, t: "n", s: numberStyle },
-        { v: row.ratio, t: "n", s: ratioStyle }, 
+        { v: fmtRatio(row.ratio), t: "s", s: rightStyle }, // 비율은 100% 텍스트로 렌더링
         { v: row.note || "", t: "s", s: centerStyle },
       ];
 
       for (let c = 0; c < rowData.length; c++) {
         ws[XLSX.utils.encode_cell({ c: c, r: r })] = rowData[c];
       }
+      r++;
     }
-    r++;
   });
 
-  ws['!ref'] = XLSX.utils.encode_range({ s: { c: 0, r: 0 }, e: { c: 10, r: r - 1 } });
+  // 셀 너비/병합 최종 적용 및 파일 생성
+  ws['!ref'] = XLSX.utils.encode_range({ s: { c: 0, r: 0 }, e: { c: 9, r: r - 1 } });
   ws['!merges'] = merges;
   ws['!cols'] = [
-    { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 15 }, 
-    { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, 
-    { wch: 14 }, { wch: 10 }, { wch: 20 }, 
+    { wch: 12 }, // A: 코드
+    { wch: 10 }, // B: 품명
+    { wch: 15 }, // C: 규격
+    { wch: 14 }, // D: 현재 프로젝트
+    { wch: 14 }, // E: A 프로젝트
+    { wch: 14 }, // F: B 프로젝트
+    { wch: 14 }, // G: C 프로젝트
+    { wch: 18 }, // H: 평균치
+    { wch: 10 }, // I: 비율
+    { wch: 20 }, // J: 비고
   ];
 
   const wb = XLSX.utils.book_new();
@@ -1464,6 +1487,6 @@ window.addEventListener("scroll", () => {
  * 최초 상태 초기화
  * ----------------------------- */
 updateFileListText();
-updateTabUI(); // 초기 탭 활성화 상태 적용
+updateTabUI();
 setStatus("대기 중");
 setLog("로그가 여기에 표시됩니다.");
