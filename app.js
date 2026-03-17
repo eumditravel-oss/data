@@ -35,6 +35,7 @@ const btnCloseMapping = $("btn-close-mapping");
 const btnApplySuggestions = $("btn-apply-suggestions");
 const btnSaveMapping = $("btn-save-mapping");
 const mappingBody = $("mapping-body");
+const typeaheadRoot = $("typeahead-root");
 
 /** -----------------------------
  * 상수
@@ -68,8 +69,7 @@ const INCLUDE_OPTIONS = [
   { value: "N", label: "제외" },
 ];
 
-const ITEM_CODE_OPTIONS = [
-  "",
+const DEFAULT_ITEM_CODE_OPTIONS = [
   "240", "270", "300", "180",
   "3회", "4회", "유로", "알폼", "갱폼", "합벽", "보밑면", "데크", "방수턱",
   "H10", "H13", "H16", "H19", "H22", "H25", "H29"
@@ -184,6 +184,13 @@ const state = {
   uniqueNames: [],
   mappingConfig: {},
   lastCompareRows: [],
+  itemCodeOptions: [...DEFAULT_ITEM_CODE_OPTIONS],
+  typeahead: {
+    targetInput: null,
+    targetKey: "",
+    items: [],
+    activeIndex: -1,
+  },
 };
 
 /** -----------------------------
@@ -263,6 +270,20 @@ function openModal() {
 function closeModal() {
   mappingModal.classList.remove("is-open");
   mappingModal.setAttribute("aria-hidden", "true");
+  hideTypeahead();
+}
+
+function sortUniqueStrings(list) {
+  return [...new Set(list.filter(Boolean))].sort((a, b) => a.localeCompare(b, "ko"));
+}
+
+function ensureItemCodeOption(value) {
+  const text = normalizeDisplayText(value);
+  if (!text) return;
+  if (!state.itemCodeOptions.includes(text)) {
+    state.itemCodeOptions.push(text);
+    state.itemCodeOptions = sortUniqueStrings(state.itemCodeOptions);
+  }
 }
 
 /** -----------------------------
@@ -296,7 +317,6 @@ function getSectionNameFromSheet(sheet) {
 function parseHeaderNames(rows) {
   const headerRow3 = rows[2] || [];
   const headerRow4 = rows[3] || [];
-
   const colStart = 1;
   const colEnd = Math.max(headerRow3.length, headerRow4.length) - 1;
   const results = [];
@@ -307,13 +327,7 @@ function parseHeaderNames(rows) {
 
     if (!top && !bottom) continue;
 
-    let name = "";
-    if (bottom) {
-      name = bottom;
-    } else {
-      name = top;
-    }
-
+    let name = bottom || top;
     if (!name) continue;
 
     results.push({
@@ -417,7 +431,6 @@ function suggestMappingByName(rawName) {
     note: "",
   };
 
-  // 레미콘
   if (t.includes("24MPA")) {
     result.category = "레미콘";
     result.itemCode = "240";
@@ -442,14 +455,13 @@ function suggestMappingByName(rawName) {
     result.note = "버림/현치무근 → 180";
     return result;
   }
-  if (t.includes("현치/구체") || t === "합벽" || t === "합벽채움" || t.includes("ACT-INSIDE")) {
+  if (t.includes("현치/구체") || t === "합벽채움" || t.includes("ACT-INSIDE")) {
     result.category = "레미콘";
     result.itemCode = "240";
     result.note = "구체/합벽/ACT-INSIDE 계열 → 240";
     return result;
   }
 
-  // 거푸집
   if (t === "3회") {
     result.category = "거푸집";
     result.itemCode = "3회";
@@ -511,7 +523,6 @@ function suggestMappingByName(rawName) {
     return result;
   }
 
-  // 철근
   if (t === "H10") {
     result.category = "철근";
     result.itemCode = "H10";
@@ -587,7 +598,9 @@ function buildUniqueNamesFromEntries() {
 function ensureMappingConfig() {
   for (const item of state.uniqueNames) {
     if (!state.mappingConfig[item.normalizedName]) {
-      state.mappingConfig[item.normalizedName] = suggestMappingByName(item.rawName);
+      const suggested = suggestMappingByName(item.rawName);
+      state.mappingConfig[item.normalizedName] = suggested;
+      if (suggested.itemCode) ensureItemCodeOption(suggested.itemCode);
     }
   }
 }
@@ -601,14 +614,15 @@ function optionHtml(list, selectedValue) {
     .join("");
 }
 
-function itemCodeOptionHtml(selectedValue) {
-  return ITEM_CODE_OPTIONS
-    .map((value) => {
-      const selected = String(value) === String(selectedValue) ? "selected" : "";
-      const label = value || "선택";
-      return `<option value="${escapeHtml(value)}" ${selected}>${escapeHtml(label)}</option>`;
-    })
-    .join("");
+function getCategoryClass(category) {
+  if (category === "레미콘") return "is-concrete";
+  if (category === "거푸집") return "is-form";
+  if (category === "철근") return "is-rebar";
+  return "is-exclude";
+}
+
+function getRowIncludeClass(include) {
+  return include === "Y" ? "is-included" : "is-excluded";
 }
 
 function renderMappingTable() {
@@ -627,7 +641,7 @@ function renderMappingTable() {
       const suggestion = suggestMappingByName(item.rawName);
 
       return `
-        <tr data-name-key="${escapeHtml(item.normalizedName)}">
+        <tr class="map-row ${getRowIncludeClass(config.include)}" data-name-key="${escapeHtml(item.normalizedName)}">
           <td>${escapeHtml(item.rawName)}</td>
           <td>
             <select class="map-include">
@@ -635,14 +649,22 @@ function renderMappingTable() {
             </select>
           </td>
           <td>
-            <select class="map-category">
+            <select class="map-category ${getCategoryClass(config.category)}">
               ${optionHtml(CATEGORY_OPTIONS, config.category)}
             </select>
           </td>
-          <td>
-            <select class="map-itemcode">
-              ${itemCodeOptionHtml(config.itemCode)}
-            </select>
+          <td class="itemcode-cell">
+            <div class="itemcode-editor">
+              <input
+                type="text"
+                class="itemcode-input"
+                value="${escapeHtml(config.itemCode || "")}"
+                autocomplete="off"
+                placeholder="직접 입력 또는 Alt+↓"
+              />
+              <button type="button" class="itemcode-add-btn">추가</button>
+            </div>
+            <div class="itemcode-help">Alt+↓ : 목록 열기 / 직접 입력 가능 / 신규 코드 추가 가능</div>
           </td>
           <td class="mapping-suggest">${escapeHtml(suggestion.note || "-")}</td>
         </tr>
@@ -651,6 +673,101 @@ function renderMappingTable() {
     .join("");
 
   mappingBody.innerHTML = html;
+  bindMappingRowBehaviors();
+}
+
+function applyVisualStateToRow(row) {
+  const includeSelect = row.querySelector(".map-include");
+  const categorySelect = row.querySelector(".map-category");
+  const include = includeSelect?.value || "N";
+  const category = categorySelect?.value || "";
+
+  row.classList.remove("is-included", "is-excluded");
+  row.classList.add(include === "Y" ? "is-included" : "is-excluded");
+
+  categorySelect.classList.remove("is-concrete", "is-form", "is-rebar", "is-exclude");
+  categorySelect.classList.add(getCategoryClass(category));
+}
+
+function bindMappingRowBehaviors() {
+  const rows = Array.from(mappingBody.querySelectorAll("tr[data-name-key]"));
+
+  rows.forEach((row) => {
+    const includeSelect = row.querySelector(".map-include");
+    const categorySelect = row.querySelector(".map-category");
+    const itemInput = row.querySelector(".itemcode-input");
+    const addBtn = row.querySelector(".itemcode-add-btn");
+
+    applyVisualStateToRow(row);
+
+    includeSelect.addEventListener("change", () => {
+      applyVisualStateToRow(row);
+    });
+
+    categorySelect.addEventListener("change", () => {
+      applyVisualStateToRow(row);
+    });
+
+    itemInput.addEventListener("focus", () => {
+      showTypeaheadForInput(itemInput, row.dataset.nameKey);
+    });
+
+    itemInput.addEventListener("input", () => {
+      showTypeaheadForInput(itemInput, row.dataset.nameKey);
+    });
+
+    itemInput.addEventListener("keydown", (e) => {
+      if (e.altKey && e.key === "ArrowDown") {
+        e.preventDefault();
+        showTypeaheadForInput(itemInput, row.dataset.nameKey, true);
+        return;
+      }
+
+      if (typeaheadRoot.hidden) return;
+
+      if (state.typeahead.targetInput !== itemInput) return;
+
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        moveTypeahead(1);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        moveTypeahead(-1);
+        return;
+      }
+      if (e.key === "Enter") {
+        if (state.typeahead.activeIndex >= 0) {
+          e.preventDefault();
+          commitTypeaheadSelection(state.typeahead.activeIndex);
+        } else {
+          const text = normalizeDisplayText(itemInput.value);
+          if (text) {
+            e.preventDefault();
+            commitManualItemCode(row.dataset.nameKey, itemInput, text);
+          }
+        }
+        return;
+      }
+      if (e.key === "Escape") {
+        hideTypeahead();
+      }
+    });
+
+    itemInput.addEventListener("blur", () => {
+      setTimeout(() => {
+        if (document.activeElement && typeaheadRoot.contains(document.activeElement)) return;
+        hideTypeahead();
+      }, 120);
+    });
+
+    addBtn.addEventListener("click", () => {
+      const text = normalizeDisplayText(itemInput.value);
+      if (!text) return;
+      commitManualItemCode(row.dataset.nameKey, itemInput, text);
+    });
+  });
 }
 
 function saveMappingFromUI() {
@@ -658,10 +775,16 @@ function saveMappingFromUI() {
 
   rows.forEach((row) => {
     const key = row.dataset.nameKey;
+    const include = row.querySelector(".map-include")?.value || "Y";
+    const category = row.querySelector(".map-category")?.value || "";
+    const itemCode = normalizeDisplayText(row.querySelector(".itemcode-input")?.value || "");
+
+    if (itemCode) ensureItemCodeOption(itemCode);
+
     state.mappingConfig[key] = {
-      include: row.querySelector(".map-include")?.value || "Y",
-      category: row.querySelector(".map-category")?.value || "",
-      itemCode: row.querySelector(".map-itemcode")?.value || "",
+      include,
+      category,
+      itemCode,
       note: suggestMappingByName(key).note || "",
     };
   });
@@ -669,9 +792,141 @@ function saveMappingFromUI() {
 
 function applyAutoSuggestionsToCurrentMapping() {
   for (const item of state.uniqueNames) {
-    state.mappingConfig[item.normalizedName] = suggestMappingByName(item.rawName);
+    const suggested = suggestMappingByName(item.rawName);
+    state.mappingConfig[item.normalizedName] = suggested;
+    if (suggested.itemCode) ensureItemCodeOption(suggested.itemCode);
   }
   renderMappingTable();
+}
+
+/** -----------------------------
+ * 타입어헤드
+ * ----------------------------- */
+function getFilteredItemCodeOptions(keyword, forceAll = false) {
+  const q = normalizeText(keyword);
+  const list = sortUniqueStrings(state.itemCodeOptions);
+
+  if (forceAll || !q) return list.slice(0, 200);
+
+  const starts = [];
+  const includes = [];
+
+  for (const item of list) {
+    const n = normalizeText(item);
+    if (n.startsWith(q)) {
+      starts.push(item);
+    } else if (n.includes(q)) {
+      includes.push(item);
+    }
+  }
+
+  return [...starts, ...includes].slice(0, 200);
+}
+
+function positionTypeahead(input) {
+  const rect = input.getBoundingClientRect();
+  const width = Math.max(rect.width, 240);
+  typeaheadRoot.style.left = `${rect.left + window.scrollX}px`;
+  typeaheadRoot.style.top = `${rect.bottom + window.scrollY + 4}px`;
+  typeaheadRoot.style.width = `${width}px`;
+}
+
+function renderTypeahead(items) {
+  state.typeahead.items = items;
+  state.typeahead.activeIndex = items.length ? 0 : -1;
+
+  if (!items.length) {
+    typeaheadRoot.innerHTML = `<div class="typeahead-empty">일치하는 항목이 없습니다. 직접 입력 후 추가할 수 있습니다.</div>`;
+    return;
+  }
+
+  typeaheadRoot.innerHTML = `
+    <div class="typeahead-list">
+      ${items.map((item, idx) => `
+        <button type="button" class="typeahead-item ${idx === 0 ? "is-active" : ""}" data-index="${idx}">
+          ${escapeHtml(item)}
+        </button>
+      `).join("")}
+    </div>
+  `;
+
+  Array.from(typeaheadRoot.querySelectorAll(".typeahead-item")).forEach((btn) => {
+    btn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+    });
+    btn.addEventListener("click", () => {
+      const idx = Number(btn.dataset.index);
+      commitTypeaheadSelection(idx);
+    });
+  });
+}
+
+function showTypeaheadForInput(input, nameKey, forceAll = false) {
+  state.typeahead.targetInput = input;
+  state.typeahead.targetKey = nameKey;
+
+  const items = getFilteredItemCodeOptions(input.value, forceAll);
+  positionTypeahead(input);
+  renderTypeahead(items);
+  typeaheadRoot.hidden = false;
+}
+
+function hideTypeahead() {
+  typeaheadRoot.hidden = true;
+  typeaheadRoot.innerHTML = "";
+  state.typeahead.targetInput = null;
+  state.typeahead.targetKey = "";
+  state.typeahead.items = [];
+  state.typeahead.activeIndex = -1;
+}
+
+function refreshTypeaheadActive() {
+  Array.from(typeaheadRoot.querySelectorAll(".typeahead-item")).forEach((el, idx) => {
+    el.classList.toggle("is-active", idx === state.typeahead.activeIndex);
+  });
+}
+
+function moveTypeahead(delta) {
+  const len = state.typeahead.items.length;
+  if (!len) return;
+  const next = state.typeahead.activeIndex + delta;
+  if (next < 0) {
+    state.typeahead.activeIndex = len - 1;
+  } else if (next >= len) {
+    state.typeahead.activeIndex = 0;
+  } else {
+    state.typeahead.activeIndex = next;
+  }
+  refreshTypeaheadActive();
+}
+
+function commitTypeaheadSelection(index) {
+  const value = state.typeahead.items[index];
+  if (!value || !state.typeahead.targetInput) return;
+
+  state.typeahead.targetInput.value = value;
+  ensureItemCodeOption(value);
+  hideTypeahead();
+  state.typeahead.targetInput?.focus();
+}
+
+function commitManualItemCode(nameKey, input, text) {
+  ensureItemCodeOption(text);
+  input.value = text;
+
+  const row = input.closest("tr[data-name-key]");
+  const category = row.querySelector(".map-category")?.value || "";
+  const include = row.querySelector(".map-include")?.value || "Y";
+
+  state.mappingConfig[nameKey] = {
+    include,
+    category,
+    itemCode: text,
+    note: suggestMappingByName(nameKey).note || "",
+  };
+
+  hideTypeahead();
+  setStatus(`아이템구분 추가: ${text}`);
 }
 
 /** -----------------------------
@@ -693,6 +948,7 @@ function clearDataState() {
   state.uniqueNames = [];
   state.mappingConfig = {};
   state.lastCompareRows = [];
+  state.itemCodeOptions = [...DEFAULT_ITEM_CODE_OPTIONS];
 }
 
 async function extractNamesFromFiles() {
@@ -1032,6 +1288,28 @@ btnCalc.addEventListener("click", () => {
 
 btnExportCsv.addEventListener("click", exportCompareCsv);
 btnReset.addEventListener("click", resetAll);
+
+document.addEventListener("click", (e) => {
+  if (!typeaheadRoot.hidden) {
+    const clickedInsideTypeahead = typeaheadRoot.contains(e.target);
+    const clickedInput = e.target.closest(".itemcode-input");
+    if (!clickedInsideTypeahead && !clickedInput) {
+      hideTypeahead();
+    }
+  }
+});
+
+window.addEventListener("resize", () => {
+  if (!typeaheadRoot.hidden && state.typeahead.targetInput) {
+    positionTypeahead(state.typeahead.targetInput);
+  }
+});
+
+window.addEventListener("scroll", () => {
+  if (!typeaheadRoot.hidden && state.typeahead.targetInput) {
+    positionTypeahead(state.typeahead.targetInput);
+  }
+}, true);
 
 /** -----------------------------
  * 최초 상태
