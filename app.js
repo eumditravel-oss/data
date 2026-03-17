@@ -26,7 +26,7 @@ const logBox = $("log-box");
 const btnExtract = $("btn-extract");
 const btnOpenMapping = $("btn-open-mapping");
 const btnCalc = $("btn-calc");
-const btnExportCsv = $("btn-export-csv"); // ID는 기존 유지, 텍스트는 엑셀로 변경 예정
+const btnExportCsv = $("btn-export-csv");
 const btnReset = $("btn-reset");
 
 const mappingModal = $("mapping-modal");
@@ -237,11 +237,10 @@ function fmtNumber(value) {
   });
 }
 
+// UI 표에 100% 형태로 출력되게 변경
 function fmtRatio(value) {
-  return Number(value || 0).toLocaleString("ko-KR", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
+  if (!value && value !== 0) return "0%";
+  return (Number(value) * 100).toFixed(0) + "%";
 }
 
 function ratioClass(value) {
@@ -287,9 +286,8 @@ function ensureItemCodeOption(value) {
 }
 
 /** -----------------------------
- * 엑셀 파싱 (완전 개편된 추출 로직)
+ * 엑셀 파싱
  * ----------------------------- */
-
 function getSectionNameFromSheetName(sheetName) {
   const name = normalizeText(sheetName);
   if (name.includes("APT") || name.includes("아파트")) return "APT";
@@ -974,7 +972,7 @@ async function extractNamesFromFiles() {
 }
 
 /** -----------------------------
- * 비교표 계산 (정렬 및 카테고리 강제 고정 로직)
+ * 비교표 계산
  * ----------------------------- */
 function getMappedEntriesByProject() {
   const result = {
@@ -1031,7 +1029,6 @@ function calcCompareRows() {
   const mappedEntries = getMappedEntriesByProject();
   const aggregate = buildProjectAggregate(mappedEntries);
 
-  // 1. 모든 키(항목) 수집
   const allKeys = new Set();
   for (const projectKey of PROJECT_KEYS) {
     for (const k of Object.keys(aggregate[projectKey])) {
@@ -1039,7 +1036,6 @@ function calcCompareRows() {
     }
   }
 
-  // 2. 동(Section) + 카테고리(Category)별 사용자 추가 항목(Dynamic) 분류
   const dynamicItems = {};
   const hardcodedKeys = new Set();
 
@@ -1065,15 +1061,12 @@ function calcCompareRows() {
 
   const rows = [];
   const sections = ["APT", "PIT", "주차장", "부대동"];
-  const categoryOrder = ["레미콘", "거푸집", "철근"]; // 엑셀/PDF 양식에 맞춘 강제 정렬 순서
+  const categoryOrder = ["레미콘", "거푸집", "철근"]; 
 
   for (const sec of sections) {
     rows.push({ type: "section", section: sec });
 
-    // 정해진 순서대로(레미콘 -> 거푸집 -> 철근) 출력
     for (const cat of categoryOrder) {
-      
-      // A. 기존에 틀(COMPARE_LAYOUT)에 정의된 항목들 먼저 출력
       const hardcodedForCat = COMPARE_LAYOUT.filter(
         r => r.type !== "section" && r.section === sec && r.category === cat
       );
@@ -1093,7 +1086,6 @@ function calcCompareRows() {
         });
       }
 
-      // B. 사용자가 추가한 신규 항목을 해당 카테고리 밑에 이어서 출력 (신규 규격 = 아이템구분)
       if (dynamicItems[sec] && dynamicItems[sec][cat]) {
         for (const ic of dynamicItems[sec][cat]) {
           const key = `${sec}__${cat}__${ic}`;
@@ -1107,8 +1099,8 @@ function calcCompareRows() {
           rows.push({
             section: sec,
             itemCode: ic,
-            item: cat,       // 품명은 카테고리명 (레미콘, 거푸집 등)
-            spec: ic,        // 규격은 아이템구분명(경사 등)과 완벽히 동일하게
+            item: cat,       
+            spec: ic,        
             category: cat,
             current: cur, A, B, C, avg, ratio, note: "사용자 추가 항목"
           });
@@ -1116,7 +1108,6 @@ function calcCompareRows() {
       }
     }
     
-    // C. 혹시 '레미콘, 거푸집, 철근' 외 다른 카테고리가 매핑된 경우 맨 밑에 추가 (안전망)
     if (dynamicItems[sec]) {
       for (const [dynCat, dynIcs] of Object.entries(dynamicItems[sec])) {
         if (!categoryOrder.includes(dynCat)) {
@@ -1220,7 +1211,7 @@ function validateBeforeCalc() {
 }
 
 /** -----------------------------
- * 엑셀(.xlsx) 내보내기 (기존 CSV 내보내기 완벽 대체)
+ * 엑셀 다운로드 (스타일 및 서식 완벽 지원)
  * ----------------------------- */
 function exportCompareExcel() {
   if (!state.lastCompareRows.length) {
@@ -1228,49 +1219,94 @@ function exportCompareExcel() {
     return;
   }
 
-  // 1. 엑셀 헤더 설정
-  const aoa = [
-    ["구분", "아이템구분", "품명", "규격", "현재 프로젝트", "A 프로젝트", "B 프로젝트", "C 프로젝트", "평균치(A~C)", "비율", "비고"]
-  ];
+  const ws = {};
+  const merges = [];
+  
+  // 1. 공통 스타일 정의 (xlsx-js-style 전용)
+  const borderAll = {
+    top: { style: "thin", color: { auto: 1 } },
+    bottom: { style: "thin", color: { auto: 1 } },
+    left: { style: "thin", color: { auto: 1 } },
+    right: { style: "thin", color: { auto: 1 } }
+  };
 
-  // 2. 데이터 행 세팅
+  const headerStyle = {
+    fill: { fgColor: { rgb: "DCE6F1" } }, // 연한 파란색
+    font: { bold: true, color: { rgb: "000000" } },
+    alignment: { horizontal: "center", vertical: "center" },
+    border: borderAll
+  };
+
+  const sectionStyle = {
+    fill: { fgColor: { rgb: "B8CCE4" } }, // 살짝 진한 파란색
+    font: { bold: true, color: { rgb: "000000" } },
+    alignment: { horizontal: "center", vertical: "center" },
+    border: borderAll
+  };
+
+  const centerStyle = {
+    font: { color: { rgb: "000000" } },
+    alignment: { horizontal: "center", vertical: "center" },
+    border: borderAll
+  };
+
+  const numberStyle = {
+    font: { color: { rgb: "000000" } },
+    alignment: { horizontal: "right", vertical: "center" },
+    border: borderAll,
+    numFmt: "#,##0.00" // 숫자 콤마 및 소수점 2자리
+  };
+
+  const ratioStyle = {
+    font: { color: { rgb: "000000" } },
+    alignment: { horizontal: "right", vertical: "center" },
+    border: borderAll,
+    numFmt: "0%" // 비율을 100% 형태 엑셀 서식으로 지정 (수식 계산 가능)
+  };
+
+  // 2. 헤더 행 생성 (Row 0)
+  const headers = ["구분", "아이템구분", "품명", "규격", "현재 프로젝트", "A 프로젝트", "B 프로젝트", "C 프로젝트", "평균치(A~C)", "비율", "비고"];
+  for (let c = 0; c < headers.length; c++) {
+    const cellRef = XLSX.utils.encode_cell({ c: c, r: 0 });
+    ws[cellRef] = { v: headers[c], t: "s", s: headerStyle };
+  }
+
+  // 3. 데이터 행 생성
+  let r = 1; 
   state.lastCompareRows.forEach((row) => {
     if (row.type === "section") {
-      // 구분(동) 타이틀 행
-      aoa.push([row.section, "", "", "", "", "", "", "", "", "", ""]);
+      // (1) 동(APT 등) 구분 타이틀 병합 셀 생성
+      ws[XLSX.utils.encode_cell({ c: 0, r: r })] = { v: row.section, t: "s", s: sectionStyle };
+      for (let c = 1; c <= 10; c++) {
+        ws[XLSX.utils.encode_cell({ c: c, r: r })] = { v: "", t: "s", s: sectionStyle };
+      }
+      merges.push({ s: { r: r, c: 0 }, e: { r: r, c: 10 } }); // A~K열 병합
     } else {
-      // 일반 데이터 행 (숫자는 숫자형식으로 넣어야 엑셀에서 계산 가능)
-      aoa.push([
-        row.section,
-        row.itemCode,
-        row.item,
-        row.spec,
-        row.current,
-        row.A,
-        row.B,
-        row.C,
-        row.avg,
-        row.ratio,
-        row.note || "",
-      ]);
+      // (2) 일반 수량 데이터 셀 생성
+      const rowData = [
+        { v: row.section, t: "s", s: centerStyle },
+        { v: row.itemCode, t: "s", s: centerStyle },
+        { v: row.item, t: "s", s: centerStyle },
+        { v: row.spec, t: "s", s: centerStyle },
+        { v: row.current, t: "n", s: numberStyle },
+        { v: row.A, t: "n", s: numberStyle },
+        { v: row.B, t: "n", s: numberStyle },
+        { v: row.C, t: "n", s: numberStyle },
+        { v: row.avg, t: "n", s: numberStyle },
+        { v: row.ratio, t: "n", s: ratioStyle }, // 100% 퍼센트 속성 적용
+        { v: row.note || "", t: "s", s: centerStyle },
+      ];
+
+      for (let c = 0; c < rowData.length; c++) {
+        ws[XLSX.utils.encode_cell({ c: c, r: r })] = rowData[c];
+      }
     }
+    r++;
   });
 
-  // 3. 워크북 및 시트 생성
-  const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-
-  // 4. 셀 병합 설정 (타이틀 행의 열을 A부터 K까지 하나로 합침)
-  if (!ws['!merges']) ws['!merges'] = [];
-  let rowIndex = 1; // 0번 인덱스는 헤더
-  state.lastCompareRows.forEach((row) => {
-    if (row.type === "section") {
-      ws['!merges'].push({ s: { r: rowIndex, c: 0 }, e: { r: rowIndex, c: 10 } });
-    }
-    rowIndex++;
-  });
-
-  // 5. 열 너비(Column Width) 가독성 세팅 (엑셀 기본 너비보다 넓고 깔끔하게)
+  // 4. 셀 범위, 열 너비, 병합 설정 주입
+  ws['!ref'] = XLSX.utils.encode_range({ s: { c: 0, r: 0 }, e: { c: 10, r: r - 1 } });
+  ws['!merges'] = merges;
   ws['!cols'] = [
     { wch: 10 }, // A: 구분
     { wch: 12 }, // B: 아이템구분
@@ -1285,7 +1321,8 @@ function exportCompareExcel() {
     { wch: 20 }, // K: 비고
   ];
 
-  // 6. 엑셀 파일 생성 및 다운로드
+  // 5. 파일 다운로드
+  const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "비교표");
   XLSX.writeFile(wb, "비교표_결과.xlsx");
 }
@@ -1377,7 +1414,7 @@ btnCalc.addEventListener("click", () => {
   }
 });
 
-// CSV 대신 엑셀 다운로드 함수 연결
+// CSV 대신 엑셀 다운로드 함수로 연결 교체
 btnExportCsv.addEventListener("click", exportCompareExcel);
 btnReset.addEventListener("click", resetAll);
 
