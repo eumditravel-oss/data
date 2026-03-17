@@ -290,7 +290,6 @@ function ensureItemCodeOption(value) {
  * 엑셀 파싱 (개선된 부분)
  * ----------------------------- */
 
-// 시트 이름을 기반으로 구분을 매핑
 function getSectionNameFromSheetName(sheetName) {
   const name = normalizeText(sheetName);
   if (name.includes("APT") || name.includes("아파트")) return "APT";
@@ -300,26 +299,31 @@ function getSectionNameFromSheetName(sheetName) {
   return ""; 
 }
 
+// 헤더 인식 범위 확대 (3행~5행 모두 탐색) 및 불필요한 열(합계) 제외
 function parseHeaderNames(rows) {
-  const headerRow3 = rows[2] || [];
-  const headerRow4 = rows[3] || [];
+  const headerRow3 = rows[2] || []; // 3행
+  const headerRow4 = rows[3] || []; // 4행
+  const headerRow5 = rows[4] || []; // 5행 추가 탐색
   const colStart = 1;
-  const colEnd = Math.max(headerRow3.length, headerRow4.length) - 1;
+  const colEnd = Math.max(headerRow3.length, headerRow4.length, headerRow5.length) - 1;
   const results = [];
 
   for (let c = colStart; c <= colEnd; c += 1) {
     const top = normalizeDisplayText(headerRow3[c]);
-    const bottom = normalizeDisplayText(headerRow4[c]);
+    const mid = normalizeDisplayText(headerRow4[c]);
+    const bottom = normalizeDisplayText(headerRow5[c]);
 
-    if (!top && !bottom) continue;
+    if (!top && !mid && !bottom) continue;
 
-    let name = bottom || top;
+    // 명칭 우선순위: 가장 아래에 적힌 상세 명칭을 우선 사용
+    let name = bottom || mid || top;
     if (!name) continue;
+
+    // "합계", "비고" 등은 명칭 매핑에서 제외
+    if (name === "합계" || name === "비고" || name === "누계" || name === "소계") continue;
 
     results.push({
       colIndex: c,
-      rawTop: top,
-      rawBottom: bottom,
       rawName: name,
       normalizedName: normalizeText(name),
     });
@@ -328,24 +332,20 @@ function parseHeaderNames(rows) {
   return results;
 }
 
+// 요약행(소계) 인식 로직 안전하게 수정
 function isSummaryRow(text) {
   const t = normalizeText(text);
   if (!t) return false;
 
-  const keywords = [
-    "소계",
-    "할증",
-    "계",
-    "합계",
-    "TOTAL",
-    "비율",
-    "수량합계",
-    "면적합계",
-  ];
+  // "계단실" 오작동 방지: 정확히 일치할 때만 처리
+  const exact = ["계", "소계", "합계", "TOTAL"];
+  if (exact.includes(t)) return true;
 
-  return keywords.some((k) => t.includes(normalizeText(k)));
+  const includes = ["수량합계", "면적합계", "할증"];
+  return includes.some((k) => t.includes(normalizeText(k)));
 }
 
+// 파싱 중단 방지: 중간 소계가 나와도 끝까지 읽도록 continue 사용
 function parseSheetEntries(rows, sectionName, projectKey, fileName) {
   const headers = parseHeaderNames(rows);
   const entries = [];
@@ -355,7 +355,7 @@ function parseSheetEntries(rows, sectionName, projectKey, fileName) {
     const rowLabel = normalizeDisplayText(row[0]);
 
     if (isSummaryRow(rowLabel)) {
-      break;
+      continue; // break 대신 continue를 써서 중간 요약행 무시 후 끝까지 진행
     }
 
     for (const header of headers) {
@@ -387,11 +387,9 @@ async function parseWorkbookFile(file, projectKey) {
   let totalEntryCount = 0;
   const parsedSheets = [];
 
-  // 엑셀 내의 모든 시트를 훑으면서 APT, PIT, 주차장, 부대동을 식별하여 파싱
   for (const sheetName of workbook.SheetNames) {
     const sectionName = getSectionNameFromSheetName(sheetName);
     
-    // 조건에 맞는 시트만 파싱 (해당되지 않는 시트는 스킵)
     if (!sectionName) continue;
 
     const sheet = workbook.Sheets[sheetName];
@@ -928,7 +926,7 @@ function commitManualItemCode(nameKey, input, text) {
 }
 
 /** -----------------------------
- * 데이터 취합 (개선된 부분)
+ * 데이터 취합
  * ----------------------------- */
 function clearDataState() {
   state.rawEntriesByProject = {
