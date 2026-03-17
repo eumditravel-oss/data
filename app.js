@@ -287,31 +287,17 @@ function ensureItemCodeOption(value) {
 }
 
 /** -----------------------------
- * 엑셀 파싱
+ * 엑셀 파싱 (개선된 부분)
  * ----------------------------- */
-function findAnalysisSheetName(workbook) {
-  const names = workbook.SheetNames || [];
-  const exact = names.find((n) => normalizeText(n) === normalizeText("분석표B"));
-  if (exact) return exact;
 
-  const partial = names.find((n) => normalizeText(n).includes(normalizeText("분석표B")));
-  if (partial) return partial;
-
-  return names[0];
-}
-
-function getSectionNameFromSheet(sheet) {
-  const candidates = ["A5", "B5", "C5", "A4", "B4", "C4"];
-  for (const addr of candidates) {
-    const cell = sheet[addr];
-    const raw = normalizeDisplayText(cell ? cell.v : "");
-    if (!raw) continue;
-    if (raw.includes("[APT]")) return "APT";
-    if (raw.includes("[PIT]")) return "PIT";
-    if (raw.includes("[주차장]")) return "주차장";
-    if (raw.includes("[부대동]")) return "부대동";
-  }
-  return "";
+// 시트 이름을 기반으로 구분을 매핑
+function getSectionNameFromSheetName(sheetName) {
+  const name = normalizeText(sheetName);
+  if (name.includes("APT") || name.includes("아파트")) return "APT";
+  if (name.includes("PIT") || name.includes("피트")) return "PIT";
+  if (name.includes("주차장")) return "주차장";
+  if (name.includes("부대")) return "부대동";
+  return ""; 
 }
 
 function parseHeaderNames(rows) {
@@ -396,25 +382,37 @@ function parseSheetEntries(rows, sectionName, projectKey, fileName) {
 async function parseWorkbookFile(file, projectKey) {
   const arrayBuffer = await file.arrayBuffer();
   const workbook = XLSX.read(arrayBuffer, { type: "array" });
-  const sheetName = findAnalysisSheetName(workbook);
-  const sheet = workbook.Sheets[sheetName];
-  const rows = XLSX.utils.sheet_to_json(sheet, {
-    header: 1,
-    raw: true,
-    defval: "",
-  });
+  
+  const allEntries = [];
+  let totalEntryCount = 0;
+  const parsedSheets = [];
 
-  const sectionName = getSectionNameFromSheet(sheet);
-  const entries = parseSheetEntries(rows, sectionName, projectKey, file.name);
+  // 엑셀 내의 모든 시트를 훑으면서 APT, PIT, 주차장, 부대동을 식별하여 파싱
+  for (const sheetName of workbook.SheetNames) {
+    const sectionName = getSectionNameFromSheetName(sheetName);
+    
+    // 조건에 맞는 시트만 파싱 (해당되지 않는 시트는 스킵)
+    if (!sectionName) continue;
+
+    const sheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json(sheet, {
+      header: 1,
+      raw: true,
+      defval: "",
+    });
+
+    const entries = parseSheetEntries(rows, sectionName, projectKey, file.name);
+    allEntries.push(...entries);
+    totalEntryCount += entries.length;
+    parsedSheets.push(`${sheetName}(${sectionName})`);
+  }
 
   return {
     projectKey,
     fileName: file.name,
-    sheetName,
-    sectionName,
-    rowCount: rows.length,
-    entryCount: entries.length,
-    entries,
+    sheetNames: parsedSheets.join(", "),
+    entryCount: totalEntryCount,
+    entries: allEntries,
   };
 }
 
@@ -930,7 +928,7 @@ function commitManualItemCode(nameKey, input, text) {
 }
 
 /** -----------------------------
- * 데이터 취합
+ * 데이터 취합 (개선된 부분)
  * ----------------------------- */
 function clearDataState() {
   state.rawEntriesByProject = {
@@ -968,9 +966,8 @@ async function extractNamesFromFiles() {
 
       logs.push(
         `[${PROJECT_LABELS[projectKey]}] 파일: ${parsed.fileName}`,
-        `- 시트명: ${parsed.sheetName}`,
-        `- 구분: ${parsed.sectionName || "미확인"}`,
-        `- 추출건수: ${parsed.entryCount}`,
+        `- 인식된 시트: ${parsed.sheetNames || "없음"}`,
+        `- 총 추출건수: ${parsed.entryCount}`,
         ""
       );
     }
