@@ -1039,15 +1039,62 @@ function calcCompareRows() {
   const mappedEntries = getMappedEntriesByProject();
   const aggregate = buildProjectAggregate(mappedEntries);
 
+  // 1. 데이터에 존재하는 모든 키(구분__분류__아이템구분) 수집
+  const allKeys = new Set();
+  for (const projectKey of PROJECT_KEYS) {
+    for (const k of Object.keys(aggregate[projectKey])) {
+      allKeys.add(k);
+    }
+  }
+
+  // 2. 동(Section)별로 사용자 추가 항목을 그룹화
+  const dynamicKeysBySection = {};
+  for (const k of allKeys) {
+    const parts = k.split("__");
+    const sec = parts[0];
+    const cat = parts[1];
+    const ic = parts[2];
+    if (!dynamicKeysBySection[sec]) dynamicKeysBySection[sec] = [];
+    dynamicKeysBySection[sec].push({ key: k, category: cat, itemCode: ic });
+  }
+
   const rows = [];
+  const processedKeys = new Set();
+  let currentSection = "";
 
   for (const row of COMPARE_LAYOUT) {
     if (row.type === "section") {
+      // 이전 구분이 끝나고 다음 구분으로 넘어가기 전에, 해당 구분의 '사용자 추가 항목'들을 표에 이어 붙입니다.
+      if (currentSection && dynamicKeysBySection[currentSection]) {
+        for (const dyn of dynamicKeysBySection[currentSection]) {
+          if (!processedKeys.has(dyn.key)) {
+            const cur = aggregate.current[dyn.key] || 0;
+            const A = aggregate.A[dyn.key] || 0;
+            const B = aggregate.B[dyn.key] || 0;
+            const C = aggregate.C[dyn.key] || 0;
+            const avg = (A + B + C) / 3;
+            const ratio = cur === 0 ? 0 : avg / cur;
+            
+            rows.push({
+              section: currentSection,
+              itemCode: dyn.itemCode,
+              item: dyn.category, // 품명은 분류(레미콘 등)로 통일
+              spec: "-",          // 임의 추가 항목이므로 규격란은 비움
+              category: dyn.category,
+              current: cur, A, B, C, avg, ratio, note: "사용자 추가 항목"
+            });
+            processedKeys.add(dyn.key);
+          }
+        }
+      }
+      currentSection = row.section;
       rows.push(row);
       continue;
     }
 
     const key = `${row.section}__${row.category}__${row.itemCode}`;
+    processedKeys.add(key);
+
     const current = aggregate.current[key] || 0;
     const A = aggregate.A[key] || 0;
     const B = aggregate.B[key] || 0;
@@ -1063,8 +1110,32 @@ function calcCompareRows() {
       C,
       avg,
       ratio,
-      note: "",
+      note: row.note || "",
     });
+  }
+
+  // 3. 마지막 구분의 '사용자 추가 항목' 털어넣기
+  if (currentSection && dynamicKeysBySection[currentSection]) {
+    for (const dyn of dynamicKeysBySection[currentSection]) {
+      if (!processedKeys.has(dyn.key)) {
+        const cur = aggregate.current[dyn.key] || 0;
+        const A = aggregate.A[dyn.key] || 0;
+        const B = aggregate.B[dyn.key] || 0;
+        const C = aggregate.C[dyn.key] || 0;
+        const avg = (A + B + C) / 3;
+        const ratio = cur === 0 ? 0 : avg / cur;
+        
+        rows.push({
+          section: currentSection,
+          itemCode: dyn.itemCode,
+          item: dyn.category,
+          spec: "-",
+          category: dyn.category,
+          current: cur, A, B, C, avg, ratio, note: "사용자 추가 항목"
+        });
+        processedKeys.add(dyn.key);
+      }
+    }
   }
 
   state.lastCompareRows = rows;
