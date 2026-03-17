@@ -26,7 +26,7 @@ const logBox = $("log-box");
 const btnExtract = $("btn-extract");
 const btnOpenMapping = $("btn-open-mapping");
 const btnCalc = $("btn-calc");
-const btnExportCsv = $("btn-export-csv");
+const btnExportCsv = $("btn-export-csv"); // ID는 기존 유지, 텍스트는 엑셀로 변경 예정
 const btnReset = $("btn-reset");
 
 const mappingModal = $("mapping-modal");
@@ -1220,23 +1220,27 @@ function validateBeforeCalc() {
 }
 
 /** -----------------------------
- * CSV 내보내기 (양식에 맞춰 그룹화 및 정렬 유지)
+ * 엑셀(.xlsx) 내보내기 (기존 CSV 내보내기 완벽 대체)
  * ----------------------------- */
-function exportCompareCsv() {
+function exportCompareExcel() {
   if (!state.lastCompareRows.length) {
     setStatus("내보낼 비교표가 없습니다.");
     return;
   }
 
-  const lines = [
+  // 1. 엑셀 헤더 설정
+  const aoa = [
     ["구분", "아이템구분", "품명", "규격", "현재 프로젝트", "A 프로젝트", "B 프로젝트", "C 프로젝트", "평균치(A~C)", "비율", "비고"]
   ];
 
+  // 2. 데이터 행 세팅
   state.lastCompareRows.forEach((row) => {
     if (row.type === "section") {
-      lines.push([row.section, "", "", "", "", "", "", "", "", "", ""]);
+      // 구분(동) 타이틀 행
+      aoa.push([row.section, "", "", "", "", "", "", "", "", "", ""]);
     } else {
-      lines.push([
+      // 일반 데이터 행 (숫자는 숫자형식으로 넣어야 엑셀에서 계산 가능)
+      aoa.push([
         row.section,
         row.itemCode,
         row.item,
@@ -1252,21 +1256,38 @@ function exportCompareCsv() {
     }
   });
 
-  const csv = "\uFEFF" + lines
-    .map((line) =>
-      line.map((cell) => `"${String(cell ?? "").replaceAll('"', '""')}"`).join(",")
-    )
-    .join("\r\n");
+  // 3. 워크북 및 시트 생성
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
 
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
+  // 4. 셀 병합 설정 (타이틀 행의 열을 A부터 K까지 하나로 합침)
+  if (!ws['!merges']) ws['!merges'] = [];
+  let rowIndex = 1; // 0번 인덱스는 헤더
+  state.lastCompareRows.forEach((row) => {
+    if (row.type === "section") {
+      ws['!merges'].push({ s: { r: rowIndex, c: 0 }, e: { r: rowIndex, c: 10 } });
+    }
+    rowIndex++;
+  });
 
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "비교표_결과.csv";
-  a.click();
+  // 5. 열 너비(Column Width) 가독성 세팅 (엑셀 기본 너비보다 넓고 깔끔하게)
+  ws['!cols'] = [
+    { wch: 10 }, // A: 구분
+    { wch: 12 }, // B: 아이템구분
+    { wch: 10 }, // C: 품명
+    { wch: 15 }, // D: 규격
+    { wch: 14 }, // E: 현재 프로젝트
+    { wch: 14 }, // F: A 프로젝트
+    { wch: 14 }, // G: B 프로젝트
+    { wch: 14 }, // H: C 프로젝트
+    { wch: 14 }, // I: 평균치
+    { wch: 10 }, // J: 비율
+    { wch: 20 }, // K: 비고
+  ];
 
-  URL.revokeObjectURL(url);
+  // 6. 엑셀 파일 생성 및 다운로드
+  XLSX.utils.book_append_sheet(wb, ws, "비교표");
+  XLSX.writeFile(wb, "비교표_결과.xlsx");
 }
 
 /** -----------------------------
@@ -1301,6 +1322,9 @@ function resetAll() {
 for (const key of PROJECT_KEYS) {
   fileInputs[key].addEventListener("change", updateFileListText);
 }
+
+// 버튼 텍스트 변경
+btnExportCsv.textContent = "엑셀 내보내기";
 
 btnExtract.addEventListener("click", async () => {
   try {
@@ -1353,7 +1377,8 @@ btnCalc.addEventListener("click", () => {
   }
 });
 
-btnExportCsv.addEventListener("click", exportCompareCsv);
+// CSV 대신 엑셀 다운로드 함수 연결
+btnExportCsv.addEventListener("click", exportCompareExcel);
 btnReset.addEventListener("click", resetAll);
 
 document.addEventListener("click", (e) => {
