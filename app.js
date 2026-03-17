@@ -287,7 +287,7 @@ function ensureItemCodeOption(value) {
 }
 
 /** -----------------------------
- * 엑셀 파싱 (개선된 부분)
+ * 엑셀 파싱 (완전 개편된 추출 로직)
  * ----------------------------- */
 
 function getSectionNameFromSheetName(sheetName) {
@@ -299,80 +299,76 @@ function getSectionNameFromSheetName(sheetName) {
   return ""; 
 }
 
-// 헤더 인식 범위 확대 (3행~5행 모두 탐색) 및 불필요한 열(합계) 제외
-function parseHeaderNames(rows) {
-  const headerRow3 = rows[2] || []; // 3행
-  const headerRow4 = rows[3] || []; // 4행
-  const headerRow5 = rows[4] || []; // 5행 추가 탐색
-  const colStart = 1;
-  const colEnd = Math.max(headerRow3.length, headerRow4.length, headerRow5.length) - 1;
-  const results = [];
+function parseSheetEntries(rows, sectionName, projectKey, fileName) {
+  // 배열 인덱스는 엑셀 행번호 - 1
+  const headerRow3 = rows[2] || []; // 노란색 타이틀 행
+  const headerRow4 = rows[3] || []; // 주황색 타이틀 행
 
-  for (let c = colStart; c <= colEnd; c += 1) {
-    const top = normalizeDisplayText(headerRow3[c]);
-    const mid = normalizeDisplayText(headerRow4[c]);
-    const bottom = normalizeDisplayText(headerRow5[c]);
+  // 수량합계(노란색 연결), 면적합계(주황색 연결)가 위치한 행을 자동으로 찾습니다.
+  let rowIdxSum3 = -1; 
+  let rowIdxSum4 = -1; 
 
-    if (!top && !mid && !bottom) continue;
-
-    // 명칭 우선순위: 가장 아래에 적힌 상세 명칭을 우선 사용
-    let name = bottom || mid || top;
-    if (!name) continue;
-
-    // "합계", "비고" 등은 명칭 매핑에서 제외
-    if (name === "합계" || name === "비고" || name === "누계" || name === "소계") continue;
-
-    results.push({
-      colIndex: c,
-      rawName: name,
-      normalizedName: normalizeText(name),
-    });
+  for (let r = 5; r < rows.length; r++) {
+    // 앞쪽 10개 열 안에서 키워드를 검색합니다.
+    const text = (rows[r] || []).slice(0, 10).map(x => normalizeText(String(x))).join("");
+    if (text.includes("수량합계") && rowIdxSum3 === -1) {
+      rowIdxSum3 = r;
+    }
+    if (text.includes("면적합계") && rowIdxSum4 === -1) {
+      rowIdxSum4 = r;
+    }
   }
 
-  return results;
-}
+  // 혹시라도 '수량합계' 텍스트를 못 찾았다면, 사용자가 지정한 38열(인덱스 37)로 강제 지정
+  if (rowIdxSum3 === -1 && rows.length > 37) rowIdxSum3 = 37;
+  // 혹시라도 '면적합계' 텍스트를 못 찾았다면, 사용자가 지정한 39열(인덱스 38)로 강제 지정
+  if (rowIdxSum4 === -1 && rows.length > 38) rowIdxSum4 = 38;
 
-// 요약행(소계) 인식 로직 안전하게 수정
-function isSummaryRow(text) {
-  const t = normalizeText(text);
-  if (!t) return false;
-
-  // "계단실" 오작동 방지: 정확히 일치할 때만 처리
-  const exact = ["계", "소계", "합계", "TOTAL"];
-  if (exact.includes(t)) return true;
-
-  const includes = ["수량합계", "면적합계", "할증"];
-  return includes.some((k) => t.includes(normalizeText(k)));
-}
-
-// 파싱 중단 방지: 중간 소계가 나와도 끝까지 읽도록 continue 사용
-function parseSheetEntries(rows, sectionName, projectKey, fileName) {
-  const headers = parseHeaderNames(rows);
+  const colStart = 1;
+  const colEnd = Math.max(headerRow3.length, headerRow4.length) - 1;
   const entries = [];
+  
+  // 합계나 비고 같은 타이틀은 건너뛰기
+  const skipHeaders = ["합계", "비고", "누계", "소계"];
 
-  for (let r = 5; r < rows.length; r += 1) {
-    const row = rows[r] || [];
-    const rowLabel = normalizeDisplayText(row[0]);
+  for (let c = colStart; c <= colEnd; c += 1) {
+    const name3 = normalizeDisplayText(headerRow3[c]);
+    const name4 = normalizeDisplayText(headerRow4[c]);
 
-    if (isSummaryRow(rowLabel)) {
-      continue; // break 대신 continue를 써서 중간 요약행 무시 후 끝까지 진행
+    // 1) 3행(노란색) 타이틀이 있다면 -> 연결된 38열(수량합계) 행에서 값을 뽑아옴
+    if (name3 && !skipHeaders.includes(name3)) {
+      const val = rowIdxSum3 !== -1 ? toNumber(rows[rowIdxSum3][c]) : 0;
+      if (val !== 0) {
+        entries.push({
+          projectKey,
+          projectLabel: PROJECT_LABELS[projectKey],
+          section: sectionName || "미확인",
+          sourceFile: fileName,
+          rowIndex: rowIdxSum3 + 1,
+          rowLabel: "수량합계",
+          rawName: name3,
+          normalizedName: normalizeText(name3),
+          qty: val,
+        });
+      }
     }
 
-    for (const header of headers) {
-      const value = toNumber(row[header.colIndex]);
-      if (!value) continue;
-
-      entries.push({
-        projectKey,
-        projectLabel: PROJECT_LABELS[projectKey],
-        section: sectionName || "미확인",
-        sourceFile: fileName,
-        rowIndex: r + 1,
-        rowLabel: rowLabel || "",
-        rawName: header.rawName,
-        normalizedName: header.normalizedName,
-        qty: value,
-      });
+    // 2) 4행(주황색) 타이틀이 있다면 -> 연결된 39열(면적합계) 행에서 값을 뽑아옴
+    if (name4 && !skipHeaders.includes(name4)) {
+      const val = rowIdxSum4 !== -1 ? toNumber(rows[rowIdxSum4][c]) : 0;
+      if (val !== 0) {
+        entries.push({
+          projectKey,
+          projectLabel: PROJECT_LABELS[projectKey],
+          section: sectionName || "미확인",
+          sourceFile: fileName,
+          rowIndex: rowIdxSum4 + 1,
+          rowLabel: "면적합계",
+          rawName: name4,
+          normalizedName: normalizeText(name4),
+          qty: val,
+        });
+      }
     }
   }
 
